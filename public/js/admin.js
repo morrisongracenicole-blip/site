@@ -41,6 +41,76 @@ function formatPrice(v) {
   return Number.isFinite(n) ? n.toFixed(2) : '0.00';
 }
 
+function formatBytes(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const UPLOAD_UI = {
+  video: {
+    block: () => $('#upload-video-block'),
+    status: () => $('#upload-video-status'),
+    progress: () => $('#upload-video-progress'),
+    fill: () => $('#upload-video-fill'),
+    pct: () => $('#upload-video-pct'),
+  },
+  thumbnail: {
+    block: () => $('#upload-thumb-block'),
+    status: () => $('#upload-thumb-status'),
+    progress: () => $('#upload-thumb-progress'),
+    fill: () => $('#upload-thumb-fill'),
+    pct: () => $('#upload-thumb-pct'),
+  },
+};
+
+function resetUploadProgress(kind) {
+  const ui = UPLOAD_UI[kind];
+  if (!ui) return;
+  ui.block()?.classList.remove('is-uploading');
+  hide(ui.progress());
+  const fill = ui.fill();
+  if (fill) {
+    fill.style.width = '0%';
+    fill.classList.remove('done');
+  }
+  if (ui.pct()) ui.pct().textContent = '0%';
+}
+
+function setUploadProgress(kind, pct, label, done = false) {
+  const ui = UPLOAD_UI[kind];
+  if (!ui) return;
+  const clamped = Math.max(0, Math.min(100, pct));
+  ui.block()?.classList.add('is-uploading');
+  show(ui.progress());
+  const fill = ui.fill();
+  if (fill) {
+    fill.style.width = `${clamped}%`;
+    fill.classList.toggle('done', done);
+  }
+  if (ui.pct()) ui.pct().textContent = `${Math.round(clamped)}%`;
+  if (label && ui.status()) ui.status().textContent = label;
+}
+
+function setSaveOverlay(showOverlay, pct = 0, msg = '') {
+  const overlay = $('#save-overlay');
+  const fill = $('#save-overlay-fill');
+  const pctEl = $('#save-overlay-pct');
+  const msgEl = $('#save-overlay-msg');
+  if (!overlay) return;
+  if (showOverlay) {
+    show(overlay);
+    if (msgEl && msg) msgEl.textContent = msg;
+    if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+  } else {
+    hide(overlay);
+    if (fill) fill.style.width = '0%';
+    if (pctEl) pctEl.textContent = '0%';
+  }
+}
+
 async function checkAuth() {
   try {
     const { user } = await api('/api/admin/me');
@@ -201,6 +271,8 @@ function resetForm() {
   $('#field-is_free').checked = false;
   $('#upload-video-status').textContent = '';
   $('#upload-thumb-status').textContent = '';
+  resetUploadProgress('video');
+  resetUploadProgress('thumbnail');
   $('#field-video_file_id').value = '';
   $('#field-thumbnail_file_id').value = '';
   $('#editor-title').textContent = 'Novo vídeo';
@@ -235,7 +307,7 @@ function closeEditor() {
   resetForm();
 }
 
-async function uploadFile(file, kind, videoId) {
+async function uploadFile(file, kind, videoId, onProgress) {
   const { uploadUrl, key } = await api('/api/admin/upload/presign', {
     method: 'POST',
     body: JSON.stringify({
@@ -246,14 +318,35 @@ async function uploadFile(file, kind, videoId) {
     }),
   });
 
-  const putRes = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-  });
+  onProgress?.(0, 'A ligar ao Wasabi…');
 
-  if (!putRes.ok) throw new Error(`Upload falhou (${putRes.status})`);
-  return key;
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (!e.lengthComputable) return;
+      const pct = (e.loaded / e.total) * 100;
+      onProgress?.(
+        pct,
+        `A enviar… ${formatBytes(e.loaded)} / ${formatBytes(e.total)}`
+      );
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(100, 'Upload concluído', true);
+        resolve(key);
+      } else {
+        reject(new Error(`Upload falhou (${xhr.status})`));
+      }
+    });
+    xhr.addEventListener('error', () => reject(new Error('Erro de rede no upload')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload cancelado')));
+
+    xhr.send(file);
+  });
 }
 
 async function handleFilePick(input, kind) {
@@ -269,7 +362,19 @@ async function handleFilePick(input, kind) {
 async function handleSave(e) {
   e.preventDefault();
   const btn = $('#save-btn');
+  const closeBtn = $('#close-editor');
   btn.disabled = true;
+  if (closeBtn) closeBtn.disabled = true;
+
+  const hasVideo = !!state.pendingVideoFile;
+  const hasThumb = !!state.pendingThumbFile;
+  const steps = 1 + (hasVideo ? 1 : 0) + (hasThumb ? 1 : 0);
+
+  function overallPct(stepIndex, filePct = 0) {
+    const base = (stepIndex / steps) * 100;
+    const slice = 100 / steps;
+    return base + (filePct / 100) * slice;
+  }
 
   try {
     const payload = {
@@ -290,7 +395,10 @@ async function handleSave(e) {
       return;
     }
 
+    setSaveOverlay(true, 2, 'A guardar metadados…');
+
     let videoId = state.editingId;
+    let step = 0;
 
     if (videoId) {
       await api(`/api/admin/videos/${videoId}`, { method: 'PATCH', body: JSON.stringify(payload) });
@@ -301,37 +409,58 @@ async function handleSave(e) {
       $('#field-id').value = videoId;
     }
 
+    step += 1;
+    setSaveOverlay(true, overallPct(step), hasVideo ? 'Metadados guardados — a enviar vídeo…' : 'A concluir…');
+
     if (state.pendingVideoFile) {
-      $('#upload-video-status').textContent = 'A enviar vídeo…';
-      const key = await uploadFile(state.pendingVideoFile, 'video', videoId);
+      const file = state.pendingVideoFile;
+      setUploadProgress('video', 0, `A preparar: ${file.name} (${formatBytes(file.size)})`);
+      const key = await uploadFile(file, 'video', videoId, (pct, label, done) => {
+        setUploadProgress('video', pct, label, done);
+        setSaveOverlay(true, overallPct(step, pct), label || 'A enviar vídeo…');
+      });
       await api(`/api/admin/videos/${videoId}`, {
         method: 'PATCH',
         body: JSON.stringify({ video_file_id: key }),
       });
       $('#field-video_file_id').value = key;
       state.pendingVideoFile = null;
-      $('#upload-video-status').textContent = `Enviado: ${key}`;
+      setUploadProgress('video', 100, `Enviado: ${file.name}`, true);
+      step += 1;
+      setSaveOverlay(
+        true,
+        overallPct(step),
+        hasThumb ? 'Vídeo enviado — a enviar thumbnail…' : 'A concluir…'
+      );
     }
 
     if (state.pendingThumbFile) {
-      $('#upload-thumb-status').textContent = 'A enviar thumbnail…';
-      const key = await uploadFile(state.pendingThumbFile, 'thumbnail', videoId);
+      const file = state.pendingThumbFile;
+      setUploadProgress('thumbnail', 0, `A preparar: ${file.name} (${formatBytes(file.size)})`);
+      const key = await uploadFile(file, 'thumbnail', videoId, (pct, label, done) => {
+        setUploadProgress('thumbnail', pct, label, done);
+        setSaveOverlay(true, overallPct(step, pct), label || 'A enviar thumbnail…');
+      });
       await api(`/api/admin/videos/${videoId}`, {
         method: 'PATCH',
         body: JSON.stringify({ thumbnail_file_id: key }),
       });
       $('#field-thumbnail_file_id').value = key;
       state.pendingThumbFile = null;
-      $('#upload-thumb-status').textContent = `Enviado: ${key}`;
+      setUploadProgress('thumbnail', 100, `Enviado: ${file.name}`, true);
+      step += 1;
     }
 
+    setSaveOverlay(true, 100, 'Concluído!');
     toast('Vídeo guardado');
     await loadVideos();
-    closeEditor();
+    setTimeout(() => closeEditor(), 400);
   } catch (err) {
     toast(err.message, true);
   } finally {
     btn.disabled = false;
+    if (closeBtn) closeBtn.disabled = false;
+    setSaveOverlay(false);
   }
 }
 

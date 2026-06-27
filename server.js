@@ -330,6 +330,29 @@ function pickVideoFields(body) {
   return out;
 }
 
+/** Supabase schema cache errors when a column was never migrated — drop and retry. */
+function stripColumnFromPayload(fields, errorMessage) {
+  const msg = String(errorMessage || '');
+  const match = msg.match(/Could not find the '(\w+)' column/i);
+  if (!match || !(match[1] in fields)) return null;
+  const next = { ...fields };
+  delete next[match[1]];
+  console.warn(`videos column '${match[1]}' missing in DB — retrying without it (run db/supabase migration)`);
+  return next;
+}
+
+async function videoDbWrite(writeFn, payload) {
+  let fields = { ...payload };
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const result = await writeFn(fields);
+    if (!result.error) return result;
+    const stripped = stripColumnFromPayload(fields, result.error.message);
+    if (!stripped) return result;
+    fields = stripped;
+  }
+  return { data: null, error: { message: 'Falha ao gravar vídeo (schema desatualizado)' } };
+}
+
 async function requireAdmin(req, res, next) {
   try {
     if (!supabase) return res.status(503).json({ error: 'Supabase não configurado' });
@@ -772,7 +795,10 @@ app.post('/api/admin/videos', requireAdmin, async (req, res) => {
       sort_order: fields.sort_order ?? 0,
     };
 
-    const { data, error } = await supabase.from('videos').insert(insert).select('*').single();
+    const { data, error } = await videoDbWrite(
+      (fields) => supabase.from('videos').insert(fields).select('*').single(),
+      insert
+    );
     if (error) return res.status(502).json({ error: error.message });
     res.status(201).json({ video: enrichVideoRow(data) });
   } catch (e) {
@@ -789,12 +815,11 @@ app.patch('/api/admin/videos/:id', requireAdmin, async (req, res) => {
     }
     if (fields.title != null) fields.title = String(fields.title).trim();
 
-    const { data, error } = await supabase
-      .from('videos')
-      .update(fields)
-      .eq('id', req.params.id)
-      .select('*')
-      .maybeSingle();
+    const { data, error } = await videoDbWrite(
+      (fields) =>
+        supabase.from('videos').update(fields).eq('id', req.params.id).select('*').maybeSingle(),
+      fields
+    );
 
     if (error) return res.status(502).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Vídeo não encontrado' });
