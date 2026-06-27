@@ -1,10 +1,11 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
+import crypto from 'crypto';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -243,6 +244,132 @@ function sanitizeObjectKey(raw) {
 }
 
 app.use(express.json());
+
+const SESSION_COOKIE = 'vv_admin';
+const SESSION_DAYS = 7;
+
+function parseCookies(req) {
+  const header = req.headers.cookie || '';
+  const out = {};
+  for (const part of header.split(';')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq);
+    const val = trimmed.slice(eq + 1);
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+function setSessionCookie(res, token) {
+  const maxAge = SESSION_DAYS * 24 * 60 * 60;
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`
+  );
+}
+
+function clearSessionCookie(res) {
+  res.setHeader(
+    'Set-Cookie',
+    `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`
+  );
+}
+
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(String(password)).digest('hex');
+}
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function sanitizeFilename(name) {
+  return String(name || 'file')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .slice(0, 120) || 'file';
+}
+
+function buildUploadKey(kind, videoId, filename) {
+  const folder = kind === 'thumbnail' ? 'thumbnails' : 'videos';
+  const id = videoId || crypto.randomUUID();
+  return `${folder}/${id}/${Date.now()}_${sanitizeFilename(filename)}`;
+}
+
+const VIDEO_EDIT_FIELDS = [
+  'title',
+  'description',
+  'price',
+  'duration',
+  'video_file_id',
+  'thumbnail_file_id',
+  'thumbnail_url',
+  'public_video_url',
+  'product_link',
+  'is_active',
+  'is_free',
+  'sort_order',
+  'masked_product_name',
+];
+
+function pickVideoFields(body) {
+  const out = {};
+  for (const key of VIDEO_EDIT_FIELDS) {
+    if (body[key] !== undefined) out[key] = body[key];
+  }
+  if (out.price != null) out.price = Number(out.price) || 0;
+  if (out.sort_order != null) out.sort_order = Number(out.sort_order) || 0;
+  if (typeof out.is_active === 'string') out.is_active = out.is_active === 'true';
+  if (typeof out.is_free === 'string') out.is_free = out.is_free === 'true';
+  return out;
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado' });
+    const token = parseCookies(req)[SESSION_COOKIE];
+    if (!token) return res.status(401).json({ error: 'Não autenticado' });
+
+    const { data: session, error } = await supabase
+      .from('sessions')
+      .select('id, user_id, expires_at, is_active, users(id, email, name, role)')
+      .eq('token', token)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (error || !session || new Date(session.expires_at) < new Date()) {
+      return res.status(401).json({ error: 'Sessão inválida ou expirada' });
+    }
+
+    req.adminUser = session.users;
+    req.adminSessionId = session.id;
+    next();
+  } catch (e) {
+    console.error('requireAdmin:', e);
+    res.status(500).json({ error: 'Erro de autenticação' });
+  }
+}
+
+async function fetchAdminVideo(id) {
+  const joined = await supabase
+    .from('videos')
+    .select('*, video_sources(*)')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (joined.error && /relationship|foreign|video_sources|schema cache/i.test(String(joined.error.message || ''))) {
+    const fb = await supabase.from('videos').select('*').eq('id', id).maybeSingle();
+    return fb;
+  }
+  return joined;
+}
 
 let supabase;
 if (supabaseUrl && supabaseKey) {
@@ -518,6 +645,216 @@ app.get('/watch', async (req, res) => {
   } catch {
     res.sendFile(path.join(__dirname, 'public', 'watch.html'));
   }
+});
+
+// ─── Admin API ───────────────────────────────────────────────────────────────
+
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    if (!supabase) return res.status(503).json({ error: 'Supabase não configurado' });
+
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email e senha são obrigatórios' });
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, email, name, role, password_hash')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (error || !user || user.password_hash !== hashPassword(password)) {
+      return res.status(401).json({ error: 'Credenciais inválidas' });
+    }
+
+    const token = generateToken();
+    const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+
+    const { error: sessErr } = await supabase.from('sessions').insert({
+      user_id: user.id,
+      token,
+      user_agent: String(req.headers['user-agent'] || '').slice(0, 500),
+      expires_at: expiresAt.toISOString(),
+    });
+
+    if (sessErr) {
+      console.error('session insert:', sessErr);
+      return res.status(500).json({ error: 'Falha ao criar sessão' });
+    }
+
+    setSessionCookie(res, token);
+    res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+  } catch (e) {
+    console.error('admin login:', e);
+    res.status(500).json({ error: 'Erro no login' });
+  }
+});
+
+app.post('/api/admin/logout', requireAdmin, async (req, res) => {
+  try {
+    if (req.adminSessionId) {
+      await supabase.from('sessions').update({ is_active: false }).eq('id', req.adminSessionId);
+    }
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  } catch (e) {
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  }
+});
+
+app.get('/api/admin/me', requireAdmin, (req, res) => {
+  res.json({ user: req.adminUser });
+});
+
+app.get('/api/admin/videos', requireAdmin, async (req, res) => {
+  try {
+    const joined = await supabase
+      .from('videos')
+      .select('*, video_sources(*)')
+      .order('created_at', { ascending: false });
+
+    let rows = joined.data || [];
+    if (joined.error && /relationship|foreign|video_sources|schema cache/i.test(String(joined.error.message || ''))) {
+      const fb = await supabase.from('videos').select('*').order('created_at', { ascending: false });
+      if (fb.error) return res.status(502).json({ error: fb.error.message });
+      rows = fb.data || [];
+    } else if (joined.error) {
+      return res.status(502).json({ error: joined.error.message });
+    }
+
+    rows.sort((a, b) => {
+      const sa = Number(a?.sort_order);
+      const sb = Number(b?.sort_order);
+      if (Number.isFinite(sa) && Number.isFinite(sb) && sa !== sb) return sa - sb;
+      return new Date(b?.created_at || 0) - new Date(a?.created_at || 0);
+    });
+
+    res.json({ videos: rows.map(enrichVideoRow) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Falha ao listar vídeos' });
+  }
+});
+
+app.get('/api/admin/videos/:id', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await fetchAdminVideo(req.params.id);
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Vídeo não encontrado' });
+    res.json({ video: enrichVideoRow(data) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Falha ao carregar vídeo' });
+  }
+});
+
+app.post('/api/admin/videos', requireAdmin, async (req, res) => {
+  try {
+    const fields = pickVideoFields(req.body);
+    if (!fields.title || !String(fields.title).trim()) {
+      return res.status(400).json({ error: 'Título é obrigatório' });
+    }
+
+    const insert = {
+      title: String(fields.title).trim(),
+      description: fields.description ?? '',
+      price: fields.price ?? 0,
+      duration: fields.duration ?? '',
+      video_file_id: fields.video_file_id ?? null,
+      thumbnail_file_id: fields.thumbnail_file_id ?? null,
+      thumbnail_url: fields.thumbnail_url ?? null,
+      public_video_url: fields.public_video_url ?? null,
+      product_link: fields.product_link ?? null,
+      is_active: fields.is_active ?? true,
+      is_free: fields.is_free ?? false,
+      sort_order: fields.sort_order ?? 0,
+      masked_product_name: fields.masked_product_name ?? 'Premium Digital Content',
+    };
+
+    const { data, error } = await supabase.from('videos').insert(insert).select('*').single();
+    if (error) return res.status(502).json({ error: error.message });
+    res.status(201).json({ video: enrichVideoRow(data) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Falha ao criar vídeo' });
+  }
+});
+
+app.patch('/api/admin/videos/:id', requireAdmin, async (req, res) => {
+  try {
+    const fields = pickVideoFields(req.body);
+    if (fields.title != null && !String(fields.title).trim()) {
+      return res.status(400).json({ error: 'Título não pode ser vazio' });
+    }
+    if (fields.title != null) fields.title = String(fields.title).trim();
+
+    const { data, error } = await supabase
+      .from('videos')
+      .update(fields)
+      .eq('id', req.params.id)
+      .select('*')
+      .maybeSingle();
+
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Vídeo não encontrado' });
+    res.json({ video: enrichVideoRow(data) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Falha ao atualizar vídeo' });
+  }
+});
+
+app.delete('/api/admin/videos/:id', requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('videos')
+      .update({ is_active: false })
+      .eq('id', req.params.id)
+      .select('id')
+      .maybeSingle();
+
+    if (error) return res.status(502).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Vídeo não encontrado' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Falha ao desativar vídeo' });
+  }
+});
+
+app.post('/api/admin/upload/presign', requireAdmin, async (req, res) => {
+  try {
+    const filename = String(req.body?.filename || 'file');
+    const contentType = String(req.body?.contentType || 'application/octet-stream');
+    const kind = req.body?.kind === 'thumbnail' ? 'thumbnail' : 'video';
+    const videoId = req.body?.videoId ? String(req.body.videoId) : null;
+
+    const key = buildUploadKey(kind, videoId, filename);
+    const { cfg, client } = await signingClientAndBucket();
+
+    if (!client || !cfg.signingReady) {
+      return res.status(503).json({ error: 'Wasabi não configurado para upload' });
+    }
+
+    const command = new PutObjectCommand({
+      Bucket: cfg.bucket,
+      Key: key,
+      ContentType: contentType,
+    });
+    const uploadUrl = await getSignedUrl(client, command, { expiresIn: 3600 });
+
+    res.json({ uploadUrl, key, expiresIn: 3600 });
+  } catch (e) {
+    console.error('presign upload:', e);
+    res.status(500).json({ error: 'Falha ao gerar URL de upload' });
+  }
+});
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
