@@ -119,11 +119,11 @@ function renderVideoTable() {
       const status = v.is_active
         ? '<span class="badge badge-ok">Ativo</span>'
         : '<span class="badge badge-off">Inativo</span>';
-      const price = v.is_free ? 'Grátis' : `€${formatPrice(v.price)}`;
-      const hasFile = v.video_file_id ? '✓' : '—';
+      const price = v.is_free ? 'Grátis' : `$${formatPrice(v.price)}`;
+      const dur = v.duration ? `<span class="muted" style="font-size:0.75rem;display:block">${escapeHtml(v.duration)}</span>` : '';
       return `<tr data-id="${v.id}">
-        <td class="thumb-cell">${v.thumbnail_file_id || v.thumbnail_url ? '🖼' : '—'}</td>
-        <td><strong>${escapeHtml(v.title)}</strong></td>
+        <td class="thumb-cell"><div class="thumb-placeholder">…</div><img class="thumb-img" alt="" hidden></td>
+        <td><strong>${escapeHtml(v.title)}</strong>${dur}</td>
         <td>${price}</td>
         <td>${v.views ?? 0}</td>
         <td>${v.sort_order ?? 0}</td>
@@ -143,6 +143,44 @@ function renderVideoTable() {
   tbody.querySelectorAll('[data-action="delete"]').forEach((btn) => {
     btn.addEventListener('click', () => deactivateVideo(btn.closest('tr').dataset.id));
   });
+
+  loadTableThumbs();
+}
+
+async function loadTableThumbs() {
+  for (const row of $$('#videos-tbody tr[data-id]')) {
+    const v = state.videos.find((x) => x.id === row.dataset.id);
+    if (!v) continue;
+
+    const img = row.querySelector('.thumb-img');
+    const ph = row.querySelector('.thumb-placeholder');
+    let url = '';
+
+    if (v.thumbnail_url && /^https?:\/\//i.test(String(v.thumbnail_url).trim())) {
+      url = String(v.thumbnail_url).trim();
+    } else if (v.wasabi_thumb_key) {
+      try {
+        const r = await fetch('/api/signed-url?key=' + encodeURIComponent(v.wasabi_thumb_key));
+        const d = await r.json();
+        if (d.url) url = d.url;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (url && img) {
+      img.onload = () => {
+        img.hidden = false;
+        if (ph) ph.hidden = true;
+      };
+      img.onerror = () => {
+        if (ph) ph.textContent = '—';
+      };
+      img.src = url;
+    } else if (ph) {
+      ph.textContent = '—';
+    }
+  }
 }
 
 function escapeHtml(s) {
@@ -182,10 +220,7 @@ function openEditor(id) {
   $('#field-price').value = v.price ?? 0;
   $('#field-duration').value = v.duration || '';
   $('#field-sort_order').value = v.sort_order ?? 0;
-  $('#field-masked_product_name').value = v.masked_product_name || 'Premium Digital Content';
   $('#field-product_link').value = v.product_link || '';
-  $('#field-public_video_url').value = v.public_video_url || '';
-  $('#field-thumbnail_url').value = v.thumbnail_url || '';
   $('#field-video_file_id').value = v.video_file_id || '';
   $('#field-thumbnail_file_id').value = v.thumbnail_file_id || '';
   $('#field-is_active').checked = v.is_active !== false;
@@ -243,10 +278,7 @@ async function handleSave(e) {
       price: Number($('#field-price').value) || 0,
       duration: $('#field-duration').value.trim(),
       sort_order: Number($('#field-sort_order').value) || 0,
-      masked_product_name: $('#field-masked_product_name').value.trim() || 'Premium Digital Content',
       product_link: $('#field-product_link').value.trim() || null,
-      public_video_url: $('#field-public_video_url').value.trim() || null,
-      thumbnail_url: $('#field-thumbnail_url').value.trim() || null,
       is_active: $('#field-is_active').checked,
       is_free: $('#field-is_free').checked,
       video_file_id: $('#field-video_file_id').value.trim() || null,

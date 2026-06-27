@@ -87,6 +87,16 @@
     .muted { color: var(--muted); }
     .error-text { color: var(--danger); }
     .actions-cell { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+    .thumb-cell { width: 72px; padding: 0.5rem !important; }
+    .thumb-img {
+      width: 56px; height: 36px; object-fit: cover; border-radius: 6px;
+      background: var(--surface-2); display: block;
+    }
+    .thumb-placeholder {
+      width: 56px; height: 36px; border-radius: 6px; background: var(--surface-2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; color: var(--muted);
+    }
     .badge {
       display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px;
       font-size: 0.68rem; font-weight: 700;
@@ -205,7 +215,7 @@
 
         <div class="field-row">
           <div class="field">
-            <label for="field-price">Preço (€)</label>
+            <label for="field-price">Preço (USD)</label>
             <input type="number" id="field-price" min="0" step="0.01" value="0">
           </div>
           <div class="field">
@@ -219,21 +229,15 @@
             <label for="field-sort_order">Ordem na loja</label>
             <input type="number" id="field-sort_order" value="0">
           </div>
-          <div class="field">
-            <label for="field-masked_product_name">Nome no recibo</label>
-            <input type="text" id="field-masked_product_name" value="Premium Digital Content">
-          </div>
-        </div>
-
-        <div class="field-row">
-          <div class="field field-check">
+          <div class="field field-check" style="align-self:end;padding-bottom:0.6rem">
             <input type="checkbox" id="field-is_active" checked>
             <label for="field-is_active">Ativo na loja</label>
           </div>
-          <div class="field field-check">
-            <input type="checkbox" id="field-is_free">
-            <label for="field-is_free">Grátis</label>
-          </div>
+        </div>
+
+        <div class="field field-check">
+          <input type="checkbox" id="field-is_free">
+          <label for="field-is_free">Grátis</label>
         </div>
 
         <div class="upload-block">
@@ -251,17 +255,7 @@
         </div>
 
         <div class="field">
-          <label for="field-thumbnail_url">URL pública da thumbnail (opcional)</label>
-          <input type="url" id="field-thumbnail_url" placeholder="https://...">
-        </div>
-
-        <div class="field">
-          <label for="field-public_video_url">URL pública do vídeo (opcional)</label>
-          <input type="url" id="field-public_video_url" placeholder="https://...">
-        </div>
-
-        <div class="field">
-          <label for="field-product_link">Link do produto (pós-compra)</label>
+          <label for="field-product_link">Link do produto (opcional, ex. conteúdo grátis)</label>
           <input type="url" id="field-product_link" placeholder="https://...">
         </div>
 

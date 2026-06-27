@@ -316,7 +316,6 @@ const VIDEO_EDIT_FIELDS = [
   'is_active',
   'is_free',
   'sort_order',
-  'masked_product_name',
 ];
 
 function pickVideoFields(body) {
@@ -771,7 +770,6 @@ app.post('/api/admin/videos', requireAdmin, async (req, res) => {
       is_active: fields.is_active ?? true,
       is_free: fields.is_free ?? false,
       sort_order: fields.sort_order ?? 0,
-      masked_product_name: fields.masked_product_name ?? 'Premium Digital Content',
     };
 
     const { data, error } = await supabase.from('videos').insert(insert).select('*').single();
