@@ -469,6 +469,10 @@ app.get('/api/video-ids', async (req, res) => {
 });
 
 /** Telegram username: Supabase site_config first, then env (videos-site). */
+function normalizeTelegramUsername(raw) {
+  return String(raw || '').replace(/^@/, '').trim();
+}
+
 async function resolveTelegramUsername() {
   let telegram = TELEGRAM_USERNAME;
   if (supabase) {
@@ -483,7 +487,39 @@ async function resolveTelegramUsername() {
       console.warn('site_config telegram_username read failed:', e.message);
     }
   }
-  return String(telegram || '').replace(/^@/, '').trim();
+  return normalizeTelegramUsername(telegram);
+}
+
+async function getSiteConfigRow() {
+  const { data, error } = await supabase
+    .from('site_config')
+    .select('id, telegram_username, crypto')
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function upsertSiteConfigFields(fields) {
+  const existing = await getSiteConfigRow();
+  const payload = { ...fields, updated_at: new Date().toISOString() };
+  if (existing?.id) {
+    return supabase.from('site_config').update(payload).eq('id', existing.id).select('telegram_username, crypto').single();
+  }
+  return supabase.from('site_config').insert(payload).select('telegram_username, crypto').single();
+}
+
+async function upsertTelegramUsername(username) {
+  const clean = normalizeTelegramUsername(username);
+  return upsertSiteConfigFields({ telegram_username: clean || null });
+}
+
+function prepareCryptoForDb(wallets) {
+  if (!Array.isArray(wallets)) return [];
+  return wallets
+    .map((w) => normalizeCryptoWalletEntry(w))
+    .filter(Boolean)
+    .map((w) => ({ symbol: w.symbol, address: w.address, label: w.label }));
 }
 
 app.get('/api/site-brief', async (req, res) => {
@@ -729,6 +765,131 @@ app.post('/api/admin/logout', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/me', requireAdmin, (req, res) => {
   res.json({ user: req.adminUser });
+});
+
+app.get('/api/admin/settings', requireAdmin, async (req, res) => {
+  try {
+    const envFallback = normalizeTelegramUsername(TELEGRAM_USERNAME);
+    const cryptoFromEnv = normalizeCryptoList(trimEnv('CRYPTO_WALLETS_JSON', 'VITE_CRYPTO_WALLETS_JSON'));
+    let dbUsername = '';
+    let cryptoFromDb = [];
+    if (supabase) {
+      const row = await getSiteConfigRow();
+      dbUsername = normalizeTelegramUsername(row?.telegram_username);
+      cryptoFromDb = normalizeCryptoList(row?.crypto);
+    }
+    const effective = dbUsername || envFallback;
+    res.json({
+      telegram_username: dbUsername,
+      telegram_from_env: envFallback,
+      telegram_effective: effective,
+      crypto_wallets: cryptoFromDb,
+      crypto_from_env: cryptoFromEnv,
+      crypto_effective: mergeCryptoDedup(cryptoFromDb, cryptoFromEnv),
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Falha ao carregar definições' });
+  }
+});
+
+app.patch('/api/admin/settings', requireAdmin, async (req, res) => {
+  try {
+    const hasTelegram = req.body?.telegram_username !== undefined;
+    const hasCrypto = req.body?.crypto_wallets !== undefined;
+    if (!hasTelegram && !hasCrypto) {
+      return res.status(400).json({ error: 'Nada para atualizar' });
+    }
+
+    const patch = {};
+    if (hasTelegram) patch.telegram_username = normalizeTelegramUsername(req.body.telegram_username) || null;
+    if (hasCrypto) patch.crypto = prepareCryptoForDb(req.body.crypto_wallets);
+
+    const { data, error } = await upsertSiteConfigFields(patch);
+    if (error) return res.status(502).json({ error: error.message });
+
+    const cryptoFromDb = normalizeCryptoList(data?.crypto);
+    const cryptoFromEnv = normalizeCryptoList(trimEnv('CRYPTO_WALLETS_JSON', 'VITE_CRYPTO_WALLETS_JSON'));
+    const savedTelegram = normalizeTelegramUsername(data?.telegram_username);
+
+    res.json({
+      ok: true,
+      telegram_username: savedTelegram,
+      telegram_effective: savedTelegram || normalizeTelegramUsername(TELEGRAM_USERNAME),
+      crypto_wallets: cryptoFromDb,
+      crypto_effective: mergeCryptoDedup(cryptoFromDb, cryptoFromEnv),
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Falha ao guardar definições' });
+  }
+});
+
+app.patch('/api/admin/account', requireAdmin, async (req, res) => {
+  try {
+    const currentPassword = String(req.body?.current_password || '');
+    const newEmail = req.body?.email != null ? String(req.body.email).trim().toLowerCase() : null;
+    const newPassword = req.body?.new_password != null ? String(req.body.new_password) : null;
+
+    if (!currentPassword) {
+      return res.status(400).json({ error: 'Senha atual é obrigatória' });
+    }
+    if (!newEmail && !newPassword) {
+      return res.status(400).json({ error: 'Indique novo email e/ou nova senha' });
+    }
+
+    const userId = req.adminUser?.id;
+    if (!userId) return res.status(401).json({ error: 'Sessão inválida' });
+
+    const { data: user, error: fetchErr } = await supabase
+      .from('users')
+      .select('id, email, name, role, password_hash')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (fetchErr || !user) return res.status(502).json({ error: 'Utilizador não encontrado' });
+    if (user.password_hash !== hashPassword(currentPassword)) {
+      return res.status(401).json({ error: 'Senha atual incorreta' });
+    }
+
+    const updates = {};
+    if (newEmail && newEmail !== user.email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+        return res.status(400).json({ error: 'Email inválido' });
+      }
+      const { data: taken } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', newEmail)
+        .neq('id', userId)
+        .maybeSingle();
+      if (taken) return res.status(409).json({ error: 'Email já em uso' });
+      updates.email = newEmail;
+    }
+    if (newPassword) {
+      if (newPassword.length < 6) {
+        return res.status(400).json({ error: 'Nova senha deve ter pelo menos 6 caracteres' });
+      }
+      updates.password_hash = hashPassword(newPassword);
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+    }
+
+    const { data: updated, error: updErr } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', userId)
+      .select('id, email, name, role')
+      .single();
+
+    if (updErr) return res.status(502).json({ error: updErr.message });
+    res.json({ ok: true, user: updated });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Falha ao atualizar conta' });
+  }
 });
 
 app.get('/api/admin/videos', requireAdmin, async (req, res) => {

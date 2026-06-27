@@ -74,6 +74,43 @@
 
     .toolbar { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
 
+    .settings-card {
+      border: 1px solid var(--stroke); border-radius: 12px;
+      background: var(--card); padding: 1rem 1.15rem; margin-bottom: 1.25rem;
+    }
+    .settings-card h3 { font-size: 0.9rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .settings-card .settings-desc { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .settings-row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .settings-row input {
+      flex: 1; min-width: 160px; padding: 0.55rem 0.75rem; border-radius: 8px;
+      border: 1px solid var(--stroke); background: var(--surface-2); color: var(--text);
+      font: inherit; font-size: 0.88rem;
+    }
+    .settings-row input:focus { outline: none; border-color: var(--primary); }
+    .settings-hint { font-size: 0.72rem; color: var(--muted); margin-top: 0.5rem; }
+    .settings-hint a { color: var(--primary); text-decoration: none; }
+    .settings-hint a:hover { text-decoration: underline; }
+
+    .crypto-edit-list { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.65rem; }
+    .crypto-edit-row {
+      display: grid; grid-template-columns: 72px 1fr 1.4fr auto; gap: 0.4rem; align-items: center;
+    }
+    @media (max-width: 640px) {
+      .crypto-edit-row { grid-template-columns: 1fr 1fr; }
+      .crypto-edit-row .crypto-address { grid-column: 1 / -1; }
+      .crypto-edit-row .crypto-remove { grid-column: -2 / -1; justify-self: end; }
+    }
+    .crypto-edit-row input {
+      padding: 0.5rem 0.6rem; border-radius: 8px;
+      border: 1px solid var(--stroke); background: var(--surface-2); color: var(--text);
+      font: inherit; font-size: 0.82rem; min-width: 0;
+    }
+    .crypto-edit-row input:focus { outline: none; border-color: var(--primary); }
+    .crypto-empty { font-size: 0.75rem; color: var(--muted); padding: 0.35rem 0; }
+
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.25rem; }
+    @media (max-width: 900px) { .settings-grid { grid-template-columns: 1fr; } }
+
     .table-wrap {
       overflow-x: auto; border: 1px solid var(--stroke); border-radius: 12px;
       background: var(--card);
@@ -206,6 +243,47 @@
       <div class="toolbar">
         <button type="button" class="btn btn-primary" id="new-video-btn">+ Novo vídeo</button>
         <button type="button" class="btn" id="refresh-btn">Atualizar lista</button>
+      </div>
+
+      <section class="settings-card">
+        <h3>Telegram</h3>
+        <p class="settings-desc">Username de suporte na loja (links Support / Help / checkout). Sem @.</p>
+        <div class="settings-row">
+          <input type="text" id="field-telegram" placeholder="ex: meuuser" autocomplete="off" maxlength="64">
+          <button type="button" class="btn btn-primary" id="save-telegram-btn">Guardar</button>
+        </div>
+        <p class="settings-hint" id="telegram-hint"></p>
+      </section>
+
+      <div class="settings-grid">
+        <section class="settings-card" style="margin-bottom:0">
+          <h3>Carteiras Crypto</h3>
+          <p class="settings-desc">Aparecem no checkout crypto da loja. Símbolo (BTC, USDT…), label opcional e endereço.</p>
+          <div class="crypto-edit-list" id="crypto-list"></div>
+          <div class="settings-row">
+            <button type="button" class="btn" id="add-crypto-btn">+ Adicionar carteira</button>
+            <button type="button" class="btn btn-primary" id="save-crypto-btn">Guardar carteiras</button>
+          </div>
+          <p class="settings-hint" id="crypto-hint"></p>
+        </section>
+
+        <section class="settings-card" style="margin-bottom:0">
+          <h3>Conta Admin</h3>
+          <p class="settings-desc">Alterar email ou senha de login. Senha atual sempre obrigatória.</p>
+          <div class="field" style="margin-bottom:0.65rem">
+            <label for="account-email">Email</label>
+            <input type="email" id="account-email" autocomplete="email">
+          </div>
+          <div class="field" style="margin-bottom:0.65rem">
+            <label for="account-current-password">Senha atual *</label>
+            <input type="password" id="account-current-password" autocomplete="current-password">
+          </div>
+          <div class="field" style="margin-bottom:0.65rem">
+            <label for="account-new-password">Nova senha (opcional)</label>
+            <input type="password" id="account-new-password" autocomplete="new-password" placeholder="mín. 6 caracteres">
+          </div>
+          <button type="button" class="btn btn-primary" id="save-account-btn">Atualizar conta</button>
+        </section>
       </div>
 
       <div class="table-wrap">

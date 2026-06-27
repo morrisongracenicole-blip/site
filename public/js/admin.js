@@ -7,6 +7,7 @@ const state = {
   editingId: null,
   pendingVideoFile: null,
   pendingThumbFile: null,
+  cryptoWallets: [],
 };
 
 async function api(path, opts = {}) {
@@ -131,6 +132,153 @@ function showDashboard() {
   hide($('#login-screen'));
   show($('#dashboard'));
   $('#admin-email').textContent = state.user?.email || '';
+  loadSettings();
+}
+
+async function loadSettings() {
+  const hint = $('#telegram-hint');
+  const input = $('#field-telegram');
+  const cryptoHint = $('#crypto-hint');
+  try {
+    const s = await api('/api/admin/settings');
+    input.value = s.telegram_username || '';
+    const effective = s.telegram_effective || s.telegram_from_env || '';
+    let hintHtml = effective
+      ? `Ativo na loja: <a href="https://t.me/${encodeURIComponent(effective)}" target="_blank" rel="noopener">@${escapeHtml(effective)}</a>`
+      : 'Nenhum username configurado — botões Support ficam desativados.';
+    if (s.telegram_from_env && s.telegram_from_env !== s.telegram_username) {
+      hintHtml += ` · Fallback env: @${escapeHtml(s.telegram_from_env)}`;
+    }
+    hint.innerHTML = hintHtml;
+
+    state.cryptoWallets = Array.isArray(s.crypto_wallets) ? s.crypto_wallets.map((w) => ({ ...w })) : [];
+    renderCryptoList();
+    const effectiveCrypto = s.crypto_effective || [];
+    if (effectiveCrypto.length) {
+      cryptoHint.textContent = `${effectiveCrypto.length} carteira(s) ativa(s) na loja`;
+    } else if (Array.isArray(s.crypto_from_env) && s.crypto_from_env.length) {
+      cryptoHint.textContent = `Nenhuma na BD — a usar ${s.crypto_from_env.length} da env`;
+    } else {
+      cryptoHint.textContent = 'Nenhuma carteira configurada';
+    }
+
+    if ($('#account-email')) {
+      $('#account-email').value = state.user?.email || '';
+    }
+  } catch (err) {
+    hint.textContent = err.message;
+    hint.classList.add('error-text');
+  }
+}
+
+function renderCryptoList() {
+  const list = $('#crypto-list');
+  if (!list) return;
+  if (!state.cryptoWallets.length) {
+    list.innerHTML = '<p class="crypto-empty">Nenhuma carteira. Clique em "+ Adicionar carteira".</p>';
+    return;
+  }
+  list.innerHTML = state.cryptoWallets
+    .map(
+      (w, i) => `<div class="crypto-edit-row" data-idx="${i}">
+        <input type="text" class="crypto-symbol" placeholder="BTC" value="${escapeHtml(w.symbol || '')}" maxlength="16">
+        <input type="text" class="crypto-label" placeholder="Label (opcional)" value="${escapeHtml(w.label || '')}" maxlength="40">
+        <input type="text" class="crypto-address" placeholder="Endereço da carteira" value="${escapeHtml(w.address || '')}">
+        <button type="button" class="btn btn-sm btn-danger crypto-remove" data-idx="${i}">✕</button>
+      </div>`
+    )
+    .join('');
+
+  list.querySelectorAll('.crypto-remove').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      collectCryptoFromDom();
+      state.cryptoWallets.splice(Number(btn.dataset.idx), 1);
+      renderCryptoList();
+    });
+  });
+}
+
+function collectCryptoFromDom() {
+  const rows = $$('.crypto-edit-row', $('#crypto-list'));
+  state.cryptoWallets = rows
+    .map((row) => ({
+      symbol: row.querySelector('.crypto-symbol')?.value.trim() || 'CRYPTO',
+      label: row.querySelector('.crypto-label')?.value.trim() || '',
+      address: row.querySelector('.crypto-address')?.value.trim() || '',
+    }))
+    .filter((w) => w.address);
+}
+
+function addCryptoRow() {
+  collectCryptoFromDom();
+  state.cryptoWallets.push({ symbol: '', label: '', address: '' });
+  renderCryptoList();
+  const rows = $$('.crypto-edit-row', $('#crypto-list'));
+  const last = rows[rows.length - 1];
+  last?.querySelector('.crypto-symbol')?.focus();
+}
+
+async function saveCrypto() {
+  const btn = $('#save-crypto-btn');
+  btn.disabled = true;
+  try {
+    collectCryptoFromDom();
+    await api('/api/admin/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ crypto_wallets: state.cryptoWallets }),
+    });
+    toast('Carteiras crypto guardadas');
+    await loadSettings();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function saveAccount() {
+  const btn = $('#save-account-btn');
+  btn.disabled = true;
+  try {
+    const payload = {
+      current_password: $('#account-current-password').value,
+      email: $('#account-email').value.trim(),
+    };
+    const newPass = $('#account-new-password').value;
+    if (newPass) payload.new_password = newPass;
+
+    const { user } = await api('/api/admin/account', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    state.user = user;
+    $('#admin-email').textContent = user.email || '';
+    $('#account-current-password').value = '';
+    $('#account-new-password').value = '';
+    toast('Conta atualizada');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function saveTelegram() {
+  const btn = $('#save-telegram-btn');
+  btn.disabled = true;
+  try {
+    const raw = $('#field-telegram').value.trim();
+    await api('/api/admin/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ telegram_username: raw }),
+    });
+    toast('Telegram atualizado');
+    await loadSettings();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function handleLogin(e) {
@@ -486,6 +634,10 @@ function init() {
   $('#close-editor').addEventListener('click', closeEditor);
   $('#video-form').addEventListener('submit', handleSave);
   $('#refresh-btn').addEventListener('click', loadVideos);
+  $('#save-telegram-btn').addEventListener('click', saveTelegram);
+  $('#add-crypto-btn').addEventListener('click', addCryptoRow);
+  $('#save-crypto-btn').addEventListener('click', saveCrypto);
+  $('#save-account-btn').addEventListener('click', saveAccount);
   $('#pick-video').addEventListener('change', (e) => handleFilePick(e.target, 'video'));
   $('#pick-thumb').addEventListener('change', (e) => handleFilePick(e.target, 'thumbnail'));
 
