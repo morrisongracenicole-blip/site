@@ -1,9 +1,5 @@
 (function (global) {
-  var MASK_NAMES = [
-    'Personal Development Ebook', 'Financial Freedom Ebook', 'Digital Marketing Guide',
-    'Health & Wellness Ebook', 'Productivity Masterclass', 'Mindfulness & Meditation Guide',
-    'Entrepreneurship Blueprint'
-  ];
+  var MASKED_PRODUCT_NAME = 'Digital Ebook';
 
   function normalizeOrigin(u) {
     try { return new URL(u).origin; } catch (e) { return ''; }
@@ -11,7 +7,7 @@
 
   function pickMaskedName(custom) {
     if (custom && String(custom).trim()) return String(custom).trim();
-    return MASK_NAMES[Math.floor(Math.random() * MASK_NAMES.length)];
+    return MASKED_PRODUCT_NAME;
   }
 
   function ebooksSuccessUrl(ebooksOrigin, price, maskedName, displayTitle, videoId) {
@@ -208,7 +204,7 @@
   }
 
   global.Storefront = {
-    MASK_NAMES: MASK_NAMES,
+    MASKED_PRODUCT_NAME: MASKED_PRODUCT_NAME,
     normalizeOrigin: normalizeOrigin,
     pickMaskedName: pickMaskedName,
     ebooksSuccessUrl: ebooksSuccessUrl,

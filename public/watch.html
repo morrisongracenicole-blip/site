@@ -334,7 +334,11 @@
     (function () {
       var EBOOKS_ORIGIN = '{{EBOOKS_SITE_URL}}';
       var TG_ENV = '{{TELEGRAM_USERNAME}}'.replace(/^@/, '').trim();
-      var MASK_NAMES = ['Personal Development Ebook', 'Financial Freedom Ebook', 'Digital Marketing Guide', 'Health & Wellness Ebook', 'Productivity Masterclass', 'Mindfulness & Meditation Guide', 'Entrepreneurship Blueprint'];
+      var MASKED_PRODUCT_NAME = 'Digital Ebook';
+      function pickMaskedName(custom) {
+        if (custom && String(custom).trim()) return String(custom).trim();
+        return MASKED_PRODUCT_NAME;
+      }
       var PURCHASE_TOAST_MS = 78000;
       var purchaseToastTimer = null;
       var PAY_TOAST_METHODS = ['Paid with card', 'Paid with Apple Pay', 'Paid with Cash App'];
@@ -361,7 +365,7 @@
       function ebooksSuccessUrl(price, maskedName, displayTitle, videoId) {
         var origin = normalizeOrigin(String(EBOOKS_ORIGIN || '').trim().replace(/\/+$/, ''));
         if (!origin) return null;
-        var masked = maskedName || MASK_NAMES[Math.floor(Math.random() * MASK_NAMES.length)];
+        var masked = pickMaskedName(maskedName);
         var params = new URLSearchParams();
         params.set('status', 'success');
         params.set('product_name', masked);
@@ -375,7 +379,7 @@
       function checkoutUrl(price, maskedName, displayTitle, videoId, method) {
         var origin = normalizeOrigin(String(EBOOKS_ORIGIN || '').trim().replace(/\/+$/, ''));
         if (!origin) return null;
-        var masked = maskedName || MASK_NAMES[Math.floor(Math.random() * MASK_NAMES.length)];
+        var masked = pickMaskedName(maskedName);
         var successUrl = ebooksSuccessUrl(price, masked, displayTitle || 'Digital purchase', videoId);
         if (!successUrl) return null;
         var p2 = new URLSearchParams();

@@ -838,11 +838,11 @@
     (function () {
       var EBOOKS_ORIGIN = '{{EBOOKS_SITE_URL}}';
       var TG_ENV = '{{TELEGRAM_USERNAME}}'.replace(/^@/, '').trim(); /* SSR: Supabase via server; client refreshes from /api/site-brief */
-      var MASK_NAMES = [
-        'Personal Development Ebook', 'Financial Freedom Ebook', 'Digital Marketing Guide',
-        'Health & Wellness Ebook', 'Productivity Masterclass', 'Mindfulness & Meditation Guide',
-        'Entrepreneurship Blueprint'
-      ];
+      var MASKED_PRODUCT_NAME = 'Digital Ebook';
+      function pickMaskedName(custom) {
+        if (custom && String(custom).trim()) return String(custom).trim();
+        return MASKED_PRODUCT_NAME;
+      }
       var PURCHASE_TOAST_MS = 78000;
       var purchaseToastTimer = null;
       var PAY_TOAST_METHODS = [
@@ -934,7 +934,7 @@
       function ebooksSuccessUrl(price, maskedName, displayTitle, videoId) {
         var origin = normalizeOrigin(String(EBOOKS_ORIGIN || '').trim().replace(/\/+$/, ''));
         if (!origin) return null;
-        var masked = maskedName || MASK_NAMES[Math.floor(Math.random() * MASK_NAMES.length)];
+        var masked = pickMaskedName(maskedName);
         var params = new URLSearchParams();
         params.set('status', 'success');
         params.set('product_name', masked);
@@ -950,7 +950,7 @@
         var origin = normalizeOrigin(String(EBOOKS_ORIGIN || '').trim().replace(/\/+$/, ''));
         if (!origin) return null;
         var vid = videoId || '';
-        var masked = maskedName || MASK_NAMES[Math.floor(Math.random() * MASK_NAMES.length)];
+        var masked = pickMaskedName(maskedName);
         var successUrl = ebooksSuccessUrl(price, masked, displayTitle || 'Digital purchase', vid);
         if (!successUrl) return null;
         var p2 = new URLSearchParams();
@@ -1006,7 +1006,7 @@
       }
 
       function startPromoCheckout() {
-        var masked = MASK_NAMES[Math.floor(Math.random() * MASK_NAMES.length)];
+        var masked = pickMaskedName();
         var origin = normalizeOrigin(String(EBOOKS_ORIGIN || '').trim().replace(/\/+$/, ''));
         if (!origin) {
           alert('Checkout is not configured. Set EBOOKS_SITE_URL or VITE_CHECKOUT_URL.');
