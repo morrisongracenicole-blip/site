@@ -152,6 +152,71 @@
     .alert.err { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
     .alert[hidden] { display: none !important; }
     .state-box { text-align: center; padding: 3rem 1.5rem; color: var(--muted); }
+    .more-section {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--stroke);
+    }
+    .more-section[hidden] { display: none !important; }
+    .more-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+      margin-bottom: 1rem; flex-wrap: wrap;
+    }
+    .more-head h2 { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.02em; }
+    .more-head a {
+      font-size: 0.8rem; font-weight: 600; color: var(--primary); text-decoration: none;
+    }
+    .more-head a:hover { text-decoration: underline; }
+    .more-grid {
+      display: grid; gap: 0.9rem;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    }
+    @media (min-width: 700px) {
+      .more-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+    }
+    .more-card {
+      display: flex; flex-direction: column;
+      text-decoration: none; color: inherit;
+      border: 1px solid var(--stroke); border-radius: 10px; overflow: hidden;
+      background: var(--bg);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .more-card:hover {
+      border-color: #c5cad3;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+    }
+    .more-thumb {
+      position: relative; width: 100%; padding-top: 56.25%;
+      background: var(--surface); overflow: hidden;
+    }
+    .more-thumb img {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; display: block;
+    }
+    .more-thumb-ph {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: #9ca3af; font-size: 0.7rem; font-weight: 600;
+      background: var(--surface);
+    }
+    .more-price {
+      position: absolute; top: 8px; right: 8px; z-index: 2;
+      font-size: 0.7rem; font-weight: 700;
+      padding: 0.2rem 0.45rem; border-radius: 5px;
+      background: rgba(255,255,255,0.95); border: 1px solid rgba(0,0,0,0.06);
+      color: var(--primary);
+    }
+    .more-dur {
+      position: absolute; bottom: 8px; right: 8px; z-index: 2;
+      font-size: 0.62rem; font-weight: 600;
+      padding: 0.15rem 0.35rem; border-radius: 4px;
+      background: rgba(0,0,0,0.75); color: #fff;
+    }
+    .more-body { padding: 0.65rem 0.7rem 0.75rem; }
+    .more-title {
+      font-size: 0.8rem; font-weight: 600; line-height: 1.35;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
     footer {
       text-align: center; padding: 1.75rem 1rem;
       font-size: 0.75rem; color: var(--muted);
@@ -225,6 +290,14 @@
         </div>
       </aside>
     </div>
+
+    <section class="more-section" id="more-section" hidden>
+      <div class="more-head">
+        <h2>More videos</h2>
+        <a href="/">See all</a>
+      </div>
+      <div class="more-grid" id="more-grid"></div>
+    </section>
   </div>
 
   <footer>
@@ -243,12 +316,18 @@
       var currentVideo = null;
       var tgUser = TG_ENV;
       var cryptoWallets = [];
+      var MORE_LIMIT = 12;
 
       function normalizeOrigin(u) { try { return new URL(u).origin; } catch (e) { return ''; } }
       function getVideoId() { var p = new URLSearchParams(window.location.search); return (p.get('id') || p.get('video_id') || '').trim(); }
       function formatDuration(d) {
         if (d == null || d === '') return '';
         if (typeof d === 'number' && !isNaN(d)) { var sec = Math.max(0, Math.round(Number(d))); return Math.floor(sec / 60) + 'min ' + (sec % 60) + 's'; }
+        var parts = String(d).split(':');
+        if (parts.length === 2) {
+          var mm = parseInt(parts[0], 10) || 0, ss = Math.round(parseFloat(parts[1]) || 0);
+          return mm + 'min ' + ss + 's';
+        }
         return String(d);
       }
       function formatViews(v) { v = Number(v) || 0; if (v < 1000) return v + ' views'; if (v < 1e6) return (v / 1000).toFixed(1) + 'K views'; return (v / 1e6).toFixed(1) + 'M views'; }
@@ -258,6 +337,81 @@
         if (!r.ok) return null;
         var j = await r.json();
         return j.success && j.url ? j.url : null;
+      }
+      function watchUrl(id) {
+        return '/watch?id=' + encodeURIComponent(String(id || ''));
+      }
+      function shuffle(arr) {
+        var a = arr.slice();
+        for (var i = a.length - 1; i > 0; i--) {
+          var j = Math.floor(Math.random() * (i + 1));
+          var t = a[i]; a[i] = a[j]; a[j] = t;
+        }
+        return a;
+      }
+      function hydrateMoreThumbs() {
+        document.querySelectorAll('.more-card[data-thumb-key]').forEach(function (card) {
+          var key = card.getAttribute('data-thumb-key');
+          var img = card.querySelector('.js-more-img');
+          var ph = card.querySelector('.js-more-ph');
+          if (!key || !img) return;
+          fetchSigned(key).then(function (u) {
+            if (!u) return;
+            img.onload = function () {
+              img.hidden = false;
+              if (ph) ph.hidden = true;
+            };
+            img.onerror = function () {};
+            img.src = u;
+          });
+        });
+      }
+      function renderMoreVideos(list, excludeId) {
+        var section = document.getElementById('more-section');
+        var grid = document.getElementById('more-grid');
+        if (!section || !grid) return;
+        var others = shuffle((list || []).filter(function (v) {
+          return v && v.id && String(v.id) !== String(excludeId);
+        })).slice(0, MORE_LIMIT);
+        if (!others.length) {
+          section.hidden = true;
+          grid.innerHTML = '';
+          return;
+        }
+        grid.innerHTML = others.map(function (v) {
+          var price = Number(v.price) || 0;
+          var isFree = !!v.is_free;
+          var dur = formatDuration(v.duration);
+          var httpPoster = '';
+          if (v.thumbnail_url && /^https?:\/\//i.test(String(v.thumbnail_url).trim())) {
+            httpPoster = String(v.thumbnail_url).trim();
+          }
+          var priceLabel = isFree ? 'Free' : ('$' + price.toFixed(2));
+          var thumbKey = v.wasabi_thumb_key || '';
+          return (
+            '<a class="more-card" href="' + escapeAttr(watchUrl(v.id)) + '"' +
+              (thumbKey && !httpPoster ? ' data-thumb-key="' + escapeAttr(thumbKey) + '"' : '') + '>' +
+              '<div class="more-thumb">' +
+                (httpPoster
+                  ? '<img src="' + escapeAttr(httpPoster) + '" alt="" loading="lazy">'
+                  : '<div class="more-thumb-ph js-more-ph">Video</div><img class="js-more-img" alt="" hidden>') +
+                '<span class="more-price">' + escapeHtml(priceLabel) + '</span>' +
+                (dur ? '<span class="more-dur">' + escapeHtml(dur) + '</span>' : '') +
+              '</div>' +
+              '<div class="more-body"><div class="more-title">' + escapeHtml(v.title || 'Untitled') + '</div></div>' +
+            '</a>'
+          );
+        }).join('');
+        section.hidden = false;
+        hydrateMoreThumbs();
+      }
+      async function loadMoreVideos(excludeId) {
+        try {
+          var r = await fetch('/api/videos');
+          if (!r.ok) return;
+          var pack = await r.json();
+          renderMoreVideos(pack.videos || [], excludeId);
+        } catch (e) {}
       }
       function ebooksSuccessUrl(price, maskedName, displayTitle, videoId) {
         var origin = normalizeOrigin(String(EBOOKS_ORIGIN || '').trim().replace(/\/+$/, ''));
@@ -377,6 +531,7 @@
         document.getElementById('v-chips').innerHTML = '<span class="chip">' + escapeHtml(formatViews(v.views)) + '</span>' + (v.duration ? '<span class="chip">' + escapeHtml(formatDuration(v.duration)) + '</span>' : '');
         renderPayPanel(v);
         loadPlayer(v);
+        loadMoreVideos(v.id);
       }
       async function boot() {
         parseUrlParams();
